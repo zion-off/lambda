@@ -18,7 +18,7 @@ export const handler = async () => {
         `is:issue state:open label:"good first issue" org:"${org}" no:assignee -linked:pr created:>${oneHourAgo}`
       );
     const request = fetch(
-      `https://api.github.com/search/issues?q${queryString}`,
+      `https://api.github.com/search/issues?${queryString}`,
       {
         headers: {
           Accept: "application/vnd.github+json",
