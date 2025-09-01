@@ -29,7 +29,17 @@ export const handler = async () => {
     requests.push(request);
   }
 
-  const results = await Promise.all(requests);
+  const responses = await Promise.all(requests);
+
+  const results = await Promise.all(
+    responses.map(async (response) => {
+      if (!response.ok) {
+        console.error(`GitHub API error: ${response.status} ${response.statusText}`);
+        return null;
+      }
+      return await response.json();
+    })
+  );
 
   const body = [];
 
