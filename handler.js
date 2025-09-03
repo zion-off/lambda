@@ -2,7 +2,8 @@
 
 import "dotenv/config";
 
-const [, , fileFlag] = process.argv;
+const args = process.argv.slice(2).filter((arg) => arg !== "--");
+const [fileFlag] = args;
 
 if (!fileFlag) {
   console.error("Usage: npm run handler -- <filename>");

@@ -1,9 +1,11 @@
 {
   "name": "lambda",
   "version": "1.0.0",
+  "type": "module",
   "main": "handler.js",
   "scripts": {
-    "handler": "node handler.js"
+    "handler": "node handler.js",
+    "run": "node handler.js"
   },
   "keywords": [],
   "author": "",

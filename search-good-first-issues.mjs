@@ -34,7 +34,9 @@ export const handler = async () => {
   const results = await Promise.all(
     responses.map(async (response) => {
       if (!response.ok) {
-        console.error(`GitHub API error: ${response.status} ${response.statusText}`);
+        console.error(
+          `GitHub API error: ${response.status} ${response.statusText}`
+        );
         return null;
       }
       return await response.json();
@@ -44,7 +46,7 @@ export const handler = async () => {
   const body = [];
 
   results.map((result) => {
-    if (!result.items) return;
+    if (!result || !result.items || result.items.length === 0) return;
 
     const orgRaw = result.items[0].repository_url.split("/")[4];
     const organization =
