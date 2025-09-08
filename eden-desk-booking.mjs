@@ -14,9 +14,9 @@ export const handler = async (event) => {
       };
     }
 
-    // Calculate next working day (Sunday-Thursday)
-    const now = new Date();
-    const nextWorkingDay = getNextWorkingDay(now);
+    // Calculate next working day (Sunday-Thursday) in Bangladesh timezone
+    const nowInBangladesh = getBangladeshTime();
+    const nextWorkingDay = getNextWorkingDay(nowInBangladesh);
 
     // Format dates for Eden API (Bangladesh timezone +06:00)
     const startDate = formatDateForEden(nextWorkingDay);
@@ -31,7 +31,7 @@ export const handler = async (event) => {
           title: `Desk ${desk_number}`,
           start_at_parts: {
             date: startDate,
-            time: getCurrentTimeString(now),
+            time: getCurrentTimeString(nowInBangladesh),
           },
           end_at_parts: {
             date: endDate,
@@ -91,10 +91,20 @@ export const handler = async (event) => {
   }
 };
 
+function getBangladeshTime() {
+  // Get current time in Bangladesh (UTC+6)
+  const now = new Date();
+  // Convert to Bangladesh time by adding 6 hours to UTC
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const bangladeshTime = new Date(utc + 6 * 3600000);
+  return bangladeshTime;
+}
+
 function getNextWorkingDay(currentDate) {
+  // currentDate is already in Bangladesh time
   const date = new Date(currentDate);
 
-  // If it's past 5 PM today, start counting from tomorrow
+  // If it's past 5 PM Bangladesh time today, start counting from tomorrow
   if (date.getHours() >= 17) {
     date.setDate(date.getDate() + 1);
   }
@@ -117,7 +127,7 @@ function getNextWorkingDay(currentDate) {
 }
 
 function formatDateForEden(date) {
-  // Format as "YYYY-MM-DDTHH:mm:ss+06:00" for Bangladesh timezone
+  // date is already in Bangladesh time, format as "YYYY-MM-DDTHH:mm:ss+06:00"
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
@@ -126,7 +136,7 @@ function formatDateForEden(date) {
 }
 
 function getCurrentTimeString(date) {
-  // Format current time as "H:mm:ss"
+  // date is already in Bangladesh time, format as "H:mm:ss"
   const hours = date.getHours();
   const minutes = String(date.getMinutes()).padStart(2, "0");
   const seconds = String(date.getSeconds()).padStart(2, "0");
