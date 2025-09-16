@@ -26,7 +26,7 @@ export const handler = async (event) => {
       operationName: "CustomerColaReservationsBookDeskMutation",
       variables: {
         input: {
-          location_id: "IVVkLRIiGDH4uEN_pyJWomd4-pSLojDxAJA0BfcNPg==",
+          location_id: "IVVkLRIiGDH4uEN_pyJX6gp-CRDYSYKOPBnfhnVWGQ==",
           owner_id: owner_id,
           title: `Desk ${desk_number}`,
           start_at_parts: {
