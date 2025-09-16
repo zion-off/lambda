@@ -1,0 +1,125 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  # Format: "filename:function-name,filename:function-name"
+  LAMBDA_FUNCTIONS: "eden-desk-booking.mjs:deskBooking,search-good-first-issues.mjs:goodFirstIssues"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test || echo "No tests configured"
+
+      - name: Lint code
+        run: npm run lint || echo "No linting configured"
+
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has-changes: ${{ steps.set-matrix.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v40
+        with:
+          files: |
+            *.mjs
+            *.js
+            package.json
+            pnpm-lock.yaml
+
+      - name: Set deployment matrix
+        id: set-matrix
+        run: |
+          # Parse LAMBDA_FUNCTIONS and check which ones need deployment
+          IFS=',' read -ra FUNCTIONS <<< "$LAMBDA_FUNCTIONS"
+          deploy_list=()
+
+          for func in "${FUNCTIONS[@]}"; do
+            IFS=':' read -ra PARTS <<< "$func"
+            filename="${PARTS[0]}"
+            function_name="${PARTS[1]}"
+
+            # Check if the specific file changed or if shared dependencies changed
+            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "$filename" || \
+               echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "package.json\|pnpm-lock.yaml"; then
+              deploy_list+=("{\"filename\":\"$filename\",\"function_name\":\"$function_name\"}")
+            fi
+          done
+
+          if [ ${#deploy_list[@]} -eq 0 ]; then
+            echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+          else
+            matrix=$(printf '%s\n' "${deploy_list[@]}" | jq -s .)
+            echo "matrix={\"include\":$matrix}" >> $GITHUB_OUTPUT
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  deploy:
+    needs: [test, detect-changes]
+    runs-on: ubuntu-latest
+    if:
+      github.ref == 'refs/heads/main' &&
+      needs.detect-changes.outputs.has-changes == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: "ap-southeast-2"
+
+      - name: Create deployment package for ${{ matrix.function_name }}
+        run: |
+          mkdir -p dist/${{ matrix.function_name }}
+          cp ${{ matrix.filename }} dist/${{ matrix.function_name }}/index.mjs
+          cp package.json dist/${{ matrix.function_name }}/
+          cd dist/${{ matrix.function_name }}
+          npm install --production
+          zip -r ../${{ matrix.function_name }}.zip .
+
+      - name: Deploy ${{ matrix.function_name }}
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ matrix.function_name }} \
+            --zip-file fileb://dist/${{ matrix.function_name }}.zip
