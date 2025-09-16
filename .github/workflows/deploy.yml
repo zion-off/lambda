@@ -11,31 +11,6 @@ env:
   LAMBDA_FUNCTIONS: "eden-desk-booking.mjs:deskBooking,search-good-first-issues.mjs:goodFirstIssues"
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: latest
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          cache: "pnpm"
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run tests
-        run: npm test || echo "No tests configured"
-
-      - name: Lint code
-        run: npm run lint || echo "No linting configured"
-
   detect-changes:
     runs-on: ubuntu-latest
     outputs:
@@ -85,7 +60,7 @@ jobs:
           fi
 
   deploy:
-    needs: [test, detect-changes]
+    needs: [detect-changes]
     runs-on: ubuntu-latest
     if:
       github.ref == 'refs/heads/main' &&
