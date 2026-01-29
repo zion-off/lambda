@@ -9,6 +9,8 @@ on:
 env:
   # Format: "filename:function-name,filename:function-name"
   LAMBDA_FUNCTIONS: "eden-desk-booking.mjs:deskBooking"
+  # Format: "filename:worker-name,filename:worker-name"
+  CLOUDFLARE_WORKERS: "worker-search-good-first-issues.mjs:search-good-first-issues"
 
 jobs:
   detect-changes:
@@ -16,6 +18,8 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       has-changes: ${{ steps.set-matrix.outputs.has-changes }}
+      worker-matrix: ${{ steps.set-matrix.outputs.worker-matrix }}
+      worker-has-changes: ${{ steps.set-matrix.outputs.worker-has-changes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -54,12 +58,36 @@ jobs:
             echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
             echo "has-changes=false" >> $GITHUB_OUTPUT
           else
-            matrix=$(printf '%s\n' "${deploy_list[@]}" | jq -s .)
+            matrix=$(printf '%s\n' "${deploy_list[@]}" | jq -sc .)
             echo "matrix={\"include\":$matrix}" >> $GITHUB_OUTPUT
             echo "has-changes=true" >> $GITHUB_OUTPUT
           fi
 
-  deploy:
+          # Parse CLOUDFLARE_WORKERS and check which ones need deployment
+          IFS=',' read -ra WORKERS <<< "$CLOUDFLARE_WORKERS"
+          worker_deploy_list=()
+
+          for worker in "${WORKERS[@]}"; do
+            IFS=':' read -ra PARTS <<< "$worker"
+            filename="${PARTS[0]}"
+            worker_name="${PARTS[1]}"
+
+            # Check if the worker file changed
+            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "$filename"; then
+              worker_deploy_list+=("{\"filename\":\"$filename\",\"worker_name\":\"$worker_name\"}")
+            fi
+          done
+
+          if [ ${#worker_deploy_list[@]} -eq 0 ]; then
+            echo "worker-matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+            echo "worker-has-changes=false" >> $GITHUB_OUTPUT
+          else
+            worker_matrix=$(printf '%s\n' "${worker_deploy_list[@]}" | jq -sc .)
+            echo "worker-matrix={\"include\":$worker_matrix}" >> $GITHUB_OUTPUT
+            echo "worker-has-changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  deploy-lambda:
     needs: [detect-changes]
     runs-on: ubuntu-latest
     if:
@@ -109,3 +137,29 @@ jobs:
           aws lambda update-function-code \
             --function-name ${{ matrix.function_name }} \
             --zip-file fileb://dist/${{ matrix.function_name }}.zip
+
+  deploy-worker:
+    needs: [detect-changes]
+    runs-on: ubuntu-latest
+    if:
+      github.ref == 'refs/heads/main' &&
+      needs.detect-changes.outputs.worker-has-changes == 'true'
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.worker-matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy ${{ matrix.worker_name }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler deploy ${{ matrix.filename }} --name ${{ matrix.worker_name }} --compatibility-date $(date +%Y-%m-%d)
