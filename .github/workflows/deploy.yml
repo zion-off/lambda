@@ -8,7 +8,7 @@ on:
 
 env:
   # Format: "filename:function-name,filename:function-name"
-  LAMBDA_FUNCTIONS: "eden-desk-booking.mjs:deskBooking,search-good-first-issues.mjs:goodFirstIssues"
+  LAMBDA_FUNCTIONS: "eden-desk-booking.mjs:deskBooking"
 
 jobs:
   detect-changes:
