@@ -6,11 +6,8 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  # Format: "filename:function-name,filename:function-name"
-  LAMBDA_FUNCTIONS: "eden-desk-booking.mjs:deskBooking"
-  # Format: "filename:worker-name,filename:worker-name"
-  CLOUDFLARE_WORKERS: "worker-search-good-first-issues.mjs:search-good-first-issues"
+# Lambda functions follow convention: lambda-*.mjs files auto-deploy with name (filename minus "lambda-" prefix)
+# Cloudflare Workers follow convention: worker-*.mjs files auto-deploy with name (filename minus "worker-" prefix)
 
 jobs:
   detect-changes:
@@ -38,21 +35,31 @@ jobs:
       - name: Set deployment matrix
         id: set-matrix
         run: |
-          # Parse LAMBDA_FUNCTIONS and check which ones need deployment
-          IFS=',' read -ra FUNCTIONS <<< "$LAMBDA_FUNCTIONS"
+          # Auto-detect Lambda functions from changed files starting with "lambda-"
           deploy_list=()
 
-          for func in "${FUNCTIONS[@]}"; do
-            IFS=':' read -ra PARTS <<< "$func"
-            filename="${PARTS[0]}"
-            function_name="${PARTS[1]}"
-
-            # Check if the specific file changed or if shared dependencies changed
-            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "$filename" || \
-               echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "package.json\|pnpm-lock.yaml"; then
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            if [[ "$file" == lambda-*.mjs ]]; then
+              filename="$file"
+              # Remove "lambda-" prefix and ".mjs" extension to get function name
+              function_name=$(echo "$filename" | sed 's/^lambda-//' | sed 's/\.mjs$//')
               deploy_list+=("{\"filename\":\"$filename\",\"function_name\":\"$function_name\"}")
             fi
           done
+
+          # Also deploy all lambdas if shared dependencies changed
+          if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "package.json\|pnpm-lock.yaml"; then
+            for file in lambda-*.mjs; do
+              if [ -f "$file" ]; then
+                filename="$file"
+                function_name=$(echo "$filename" | sed 's/^lambda-//' | sed 's/\.mjs$//')
+                # Check if not already in deploy_list
+                if ! printf '%s\n' "${deploy_list[@]}" | grep -q "\"filename\":\"$filename\""; then
+                  deploy_list+=("{\"filename\":\"$filename\",\"function_name\":\"$function_name\"}")
+                fi
+              fi
+            done
+          fi
 
           if [ ${#deploy_list[@]} -eq 0 ]; then
             echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
@@ -63,17 +70,14 @@ jobs:
             echo "has-changes=true" >> $GITHUB_OUTPUT
           fi
 
-          # Parse CLOUDFLARE_WORKERS and check which ones need deployment
-          IFS=',' read -ra WORKERS <<< "$CLOUDFLARE_WORKERS"
+          # Auto-detect Cloudflare Workers from changed files starting with "worker-"
           worker_deploy_list=()
 
-          for worker in "${WORKERS[@]}"; do
-            IFS=':' read -ra PARTS <<< "$worker"
-            filename="${PARTS[0]}"
-            worker_name="${PARTS[1]}"
-
-            # Check if the worker file changed
-            if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "$filename"; then
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            if [[ "$file" == worker-*.mjs ]]; then
+              filename="$file"
+              # Remove "worker-" prefix and ".mjs" extension to get worker name
+              worker_name=$(echo "$filename" | sed 's/^worker-//' | sed 's/\.mjs$//')
               worker_deploy_list+=("{\"filename\":\"$filename\",\"worker_name\":\"$worker_name\"}")
             fi
           done
