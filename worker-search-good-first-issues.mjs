@@ -1,20 +1,13 @@
-export default {
-  async fetch(_request, env, _ctx) {
-    const orgsToSearch = env.ORGS_TO_SEARCH;
-    const recipients = env.RECIPIENTS;
-    const resend_api_key = env.RESEND_API_KEY;
-    const github_api_key = env.GITHUB_TOKEN;
+async function searchAndNotify(env) {
+  const orgsToSearch = env.ORGS_TO_SEARCH;
+  const recipients = env.RECIPIENTS;
+  const resend_api_key = env.RESEND_API_KEY;
+  const github_api_key = env.GITHUB_TOKEN;
 
-    if (!orgsToSearch || !recipients || !resend_api_key) {
-      console.error("Missing required environment variables");
-      return new Response(
-        JSON.stringify({ error: "Missing required environment variables" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
+  if (!orgsToSearch || !recipients || !resend_api_key) {
+    console.error("Missing required environment variables");
+    return { error: "Missing required environment variables" };
+  }
 
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const requests = [];
@@ -53,19 +46,13 @@ export default {
       })
     );
 
-    // Check if any requests failed
-    if (results.some((result) => result === null)) {
-      return new Response(
-        JSON.stringify({
-          error: "GitHub API request failed",
-          details: "One or more GitHub API requests returned an error",
-        }),
-        {
-          status: 502,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
+  // Check if any requests failed
+  if (results.some((result) => result === null)) {
+    return {
+      error: "GitHub API request failed",
+      details: "One or more GitHub API requests returned an error",
+    };
+  }
 
     const issuesByOrg = [];
 
@@ -216,34 +203,41 @@ export default {
       </html>
     `;
 
-    if (!issuesByOrg.length) {
-      return new Response(JSON.stringify({ message: "No new issues found" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
+  if (!issuesByOrg.length) {
+    return { message: "No new issues found" };
+  }
 
-    try {
-      await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resend_api_key}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: "Notifications <notifications@mail.zzzzion.com>",
-          to: recipients.split(","),
-          subject: "New good first issues",
-          html: emailBody,
-        }),
-      });
-    } catch (error) {
-      console.error("Error sending email:", error);
-    }
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resend_api_key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: "Notifications <notifications@mail.zzzzion.com>",
+        to: recipients.split(","),
+        subject: "New good first issues",
+        html: emailBody,
+      }),
+    });
+  } catch (error) {
+    console.error("Error sending email:", error);
+  }
 
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
+  return { success: true };
+}
+
+export default {
+  async fetch(_request, env, _ctx) {
+    const result = await searchAndNotify(env);
+    return new Response(JSON.stringify(result), {
+      status: result.error ? 500 : 200,
       headers: { "Content-Type": "application/json" },
     });
+  },
+
+  async scheduled(_event, env, _ctx) {
+    await searchAndNotify(env);
   },
 };
