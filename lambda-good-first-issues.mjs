@@ -1,8 +1,8 @@
-async function searchAndNotify(env) {
-  const orgsToSearch = env.ORGS_TO_SEARCH;
-  const recipients = env.RECIPIENTS;
-  const resend_api_key = env.RESEND_API_KEY;
-  const github_api_key = env.GITHUB_TOKEN;
+async function searchAndNotify() {
+  const orgsToSearch = process.env.ORGS_TO_SEARCH;
+  const recipients = process.env.RECIPIENTS;
+  const resend_api_key = process.env.RESEND_API_KEY;
+  const github_api_key = process.env.GITHUB_TOKEN;
 
   if (!orgsToSearch || !recipients || !resend_api_key) {
     console.error("Missing required environment variables");
@@ -25,7 +25,7 @@ async function searchAndNotify(env) {
             Accept: "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             Authorization: `Bearer ${github_api_key}`,
-            "User-Agent": "cloudflare-worker",
+            "User-Agent": "aws-lambda",
           },
         }
       );
@@ -228,16 +228,14 @@ async function searchAndNotify(env) {
   return { success: true };
 }
 
-export default {
-  async fetch(_request, env, _ctx) {
-    const result = await searchAndNotify(env);
-    return new Response(JSON.stringify(result), {
-      status: result.error ? 500 : 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  },
+export const handler = async (event) => {
+  const result = await searchAndNotify();
 
-  async scheduled(_event, env, _ctx) {
-    await searchAndNotify(env);
-  },
+  return {
+    statusCode: result.error ? 500 : 200,
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(result),
+  };
 };
