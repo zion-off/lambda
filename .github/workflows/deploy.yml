@@ -6,8 +6,8 @@ on:
   pull_request:
     branches: [main]
 
-# Lambda functions follow convention: lambda-*.mjs files auto-deploy with name (filename minus "lambda-" prefix)
-# Cloudflare Workers follow convention: worker-*.mjs files auto-deploy with name (filename minus "worker-" prefix)
+# Lambda functions: lambda/*.mjs files auto-deploy with name derived from filename
+# Cloudflare Workers: worker/*.mjs files auto-deploy with name derived from filename
 
 jobs:
   detect-changes:
@@ -27,32 +27,32 @@ jobs:
         uses: tj-actions/changed-files@v40
         with:
           files: |
-            *.mjs
-            *.js
+            lambda/**
+            worker/**
             package.json
             pnpm-lock.yaml
 
       - name: Set deployment matrix
         id: set-matrix
         run: |
-          # Auto-detect Lambda functions from changed files starting with "lambda-"
+          # Auto-detect Lambda functions from changed files in lambda/
           deploy_list=()
 
           for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-            if [[ "$file" == lambda-*.mjs ]]; then
+            if [[ "$file" == lambda/*.mjs ]]; then
               filename="$file"
-              # Remove "lambda-" prefix and ".mjs" extension to get function name
-              function_name=$(echo "$filename" | sed 's/^lambda-//' | sed 's/\.mjs$//')
+              # Remove "lambda/" prefix and ".mjs" extension to get function name
+              function_name=$(basename "$filename" .mjs)
               deploy_list+=("{\"filename\":\"$filename\",\"function_name\":\"$function_name\"}")
             fi
           done
 
           # Also deploy all lambdas if shared dependencies changed
           if echo "${{ steps.changed-files.outputs.all_changed_files }}" | grep -q "package.json\|pnpm-lock.yaml"; then
-            for file in lambda-*.mjs; do
+            for file in lambda/*.mjs; do
               if [ -f "$file" ]; then
                 filename="$file"
-                function_name=$(echo "$filename" | sed 's/^lambda-//' | sed 's/\.mjs$//')
+                function_name=$(basename "$filename" .mjs)
                 # Check if not already in deploy_list
                 if ! printf '%s\n' "${deploy_list[@]}" | grep -q "\"filename\":\"$filename\""; then
                   deploy_list+=("{\"filename\":\"$filename\",\"function_name\":\"$function_name\"}")
@@ -70,14 +70,14 @@ jobs:
             echo "has-changes=true" >> $GITHUB_OUTPUT
           fi
 
-          # Auto-detect Cloudflare Workers from changed files starting with "worker-"
+          # Auto-detect Cloudflare Workers from changed files in worker/
           worker_deploy_list=()
 
           for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-            if [[ "$file" == worker-*.mjs ]]; then
+            if [[ "$file" == worker/*.mjs ]]; then
               filename="$file"
-              # Remove "worker-" prefix and ".mjs" extension to get worker name
-              worker_name=$(echo "$filename" | sed 's/^worker-//' | sed 's/\.mjs$//')
+              # Remove "worker/" prefix and ".mjs" extension to get worker name
+              worker_name=$(basename "$filename" .mjs)
               worker_deploy_list+=("{\"filename\":\"$filename\",\"worker_name\":\"$worker_name\"}")
             fi
           done
@@ -94,8 +94,7 @@ jobs:
   deploy-lambda:
     needs: [detect-changes]
     runs-on: ubuntu-latest
-    if:
-      github.ref == 'refs/heads/main' &&
+    if: github.ref == 'refs/heads/main' &&
       needs.detect-changes.outputs.has-changes == 'true'
     permissions:
       id-token: write
@@ -128,13 +127,9 @@ jobs:
 
       - name: Create deployment package for ${{ matrix.function_name }}
         run: |
-          mkdir -p dist/${{ matrix.function_name }}
-          cp ${{ matrix.filename }} dist/${{ matrix.function_name }}/index.mjs
-          cp package.json dist/${{ matrix.function_name }}/
-          cp pnpm-lock.yaml dist/${{ matrix.function_name }}/
-          cd dist/${{ matrix.function_name }}
-          pnpm install --prod --frozen-lockfile
-          zip -r ../${{ matrix.function_name }}.zip .
+          mkdir -p dist
+          cp ${{ matrix.filename }} index.mjs
+          zip dist/${{ matrix.function_name }}.zip index.mjs
 
       - name: Deploy ${{ matrix.function_name }}
         run: |
@@ -145,8 +140,7 @@ jobs:
   deploy-worker:
     needs: [detect-changes]
     runs-on: ubuntu-latest
-    if:
-      github.ref == 'refs/heads/main' &&
+    if: github.ref == 'refs/heads/main' &&
       needs.detect-changes.outputs.worker-has-changes == 'true'
     strategy:
       matrix: ${{ fromJson(needs.detect-changes.outputs.worker-matrix) }}

@@ -7,7 +7,7 @@ settings:
 importers:
 
   .:
-    dependencies:
+    devDependencies:
       dotenv:
         specifier: ^17.2.1
         version: 17.2.2
