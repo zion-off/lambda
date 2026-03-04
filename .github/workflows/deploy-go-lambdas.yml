@@ -1,0 +1,88 @@
+name: Deploy Go Lambdas
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lambda/go/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'lambda/go/**'
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has-changes: ${{ steps.set-matrix.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v40
+        with:
+          files: lambda/go/**
+
+      - name: Set deployment matrix
+        id: set-matrix
+        run: |
+          deploy_list=()
+          declare -A seen
+
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            dir=$(echo "$file" | cut -d'/' -f3)
+            if [[ -n "$dir" && -z "${seen[$dir]}" ]]; then
+              seen[$dir]=1
+              deploy_list+=("{\"dir\":\"lambda/go/$dir\",\"function_name\":\"$dir\"}")
+            fi
+          done
+
+          if [ ${#deploy_list[@]} -eq 0 ]; then
+            echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+          else
+            matrix=$(printf '%s\n' "${deploy_list[@]}" | jq -sc .)
+            echo "matrix={\"include\":$matrix}" >> $GITHUB_OUTPUT
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  deploy:
+    needs: [detect-changes]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' &&
+      needs.detect-changes.outputs.has-changes == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.dir }}/go.mod
+
+      - name: Build ${{ matrix.function_name }}
+        run: |
+          cd ${{ matrix.dir }}
+          GOOS=linux GOARCH=amd64 go build -o bootstrap .
+          zip ${{ matrix.function_name }}.zip bootstrap
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-southeast-2
+
+      - name: Deploy ${{ matrix.function_name }}
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ matrix.function_name }} \
+            --zip-file fileb://${{ matrix.dir }}/${{ matrix.function_name }}.zip

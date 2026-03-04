@@ -1,0 +1,80 @@
+name: Deploy Node Lambdas
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lambda/node/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'lambda/node/**'
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      has-changes: ${{ steps.set-matrix.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v40
+        with:
+          files: lambda/node/**
+
+      - name: Set deployment matrix
+        id: set-matrix
+        run: |
+          deploy_list=()
+
+          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
+            if [[ "$file" == lambda/node/*.mjs ]]; then
+              function_name=$(basename "$file" .mjs)
+              deploy_list+=("{\"filename\":\"$file\",\"function_name\":\"$function_name\"}")
+            fi
+          done
+
+          if [ ${#deploy_list[@]} -eq 0 ]; then
+            echo "matrix={\"include\":[]}" >> $GITHUB_OUTPUT
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+          else
+            matrix=$(printf '%s\n' "${deploy_list[@]}" | jq -sc .)
+            echo "matrix={\"include\":$matrix}" >> $GITHUB_OUTPUT
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+          fi
+
+  deploy:
+    needs: [detect-changes]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' &&
+      needs.detect-changes.outputs.has-changes == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    strategy:
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ap-southeast-2
+
+      - name: Create deployment package for ${{ matrix.function_name }}
+        run: |
+          cp ${{ matrix.filename }} index.mjs
+          zip ${{ matrix.function_name }}.zip index.mjs
+
+      - name: Deploy ${{ matrix.function_name }}
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ matrix.function_name }} \
+            --zip-file fileb://${{ matrix.function_name }}.zip
