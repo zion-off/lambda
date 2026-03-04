@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -24,6 +25,18 @@ var (
 	client       *http.Client = &http.Client{}
 )
 
+type githubIssue struct {
+	Title         string `json:"title"`
+	HTMLURL       string `json:"html_url"`
+	RepositoryURL string `json:"repository_url"`
+	Body          string `json:"body"`
+	Comments      int    `json:"comments"`
+}
+
+type githubSearchResult struct {
+	Items []githubIssue `json:"items"`
+}
+
 type OrgIssues struct {
 	Org    string
 	issues string
@@ -37,7 +50,7 @@ func checkEnvVars() error {
 	return nil
 }
 
-func fetchOpenIssues(org string, c chan map[string]any, wg *sync.WaitGroup) {
+func fetchOpenIssues(org string, c chan *githubSearchResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	since := time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano)
@@ -45,7 +58,7 @@ func fetchOpenIssues(org string, c chan map[string]any, wg *sync.WaitGroup) {
 	endpoint := "https://api.github.com/search/issues?" + query
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
-		c <- map[string]any{"error": err.Error()}
+		log.Printf("error creating request for org %s: %v", org, err)
 		return
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
@@ -55,7 +68,7 @@ func fetchOpenIssues(org string, c chan map[string]any, wg *sync.WaitGroup) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		c <- map[string]any{"error": err.Error()}
+		log.Printf("error fetching issues for org %s: %v", org, err)
 		return
 	}
 
@@ -63,31 +76,28 @@ func fetchOpenIssues(org string, c chan map[string]any, wg *sync.WaitGroup) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		c <- map[string]any{"error": fmt.Errorf("HTTP request failed with status %d: %s", resp.StatusCode, string(body))}
+		log.Printf("HTTP request failed for org %s with status %d: %s", org, resp.StatusCode, string(body))
 		return
 	}
 
-	res := make(map[string]any)
-	json.NewDecoder(resp.Body).Decode(&res)
-	c <- res
+	var res githubSearchResult
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		log.Printf("error decoding response for org %s: %v", org, err)
+		return
+	}
+	c <- &res
 }
 
-func generateIssueRow(item any, isLastIssue bool) string {
-	itemMap, ok := item.(map[string]any)
-	if !ok {
-		return ""
-	}
-
-	repoURL, _ := itemMap["repository_url"].(string)
-	parts := strings.Split(repoURL, "/")
+func generateIssueRow(item githubIssue, isLastIssue bool) string {
+	parts := strings.Split(item.RepositoryURL, "/")
 	repoName := parts[len(parts)-1]
 
 	var truncatedBody string
-	if body, ok := itemMap["body"].(string); ok && body != "" {
-		if len(body) > 200 {
-			truncatedBody = body[:200] + "..."
+	if item.Body != "" {
+		if len(item.Body) > 200 {
+			truncatedBody = item.Body[:200] + "..."
 		} else {
-			truncatedBody = body
+			truncatedBody = item.Body
 		}
 	} else {
 		truncatedBody = "No description provided"
@@ -97,22 +107,18 @@ func generateIssueRow(item any, isLastIssue bool) string {
 	truncatedBody = strings.ReplaceAll(truncatedBody, ">", "&gt;")
 	truncatedBody = strings.ReplaceAll(truncatedBody, "\n", " ")
 
-	htmlURL, _ := itemMap["html_url"].(string)
-	title, _ := itemMap["title"].(string)
-	comments, _ := itemMap["comments"].(float64)
-
 	paddingStyle := "0 0 28px 0"
 	if isLastIssue {
 		paddingStyle = "0"
 	}
 
 	commentStr := ""
-	if comments > 0 {
+	if item.Comments > 0 {
 		plural := "s"
-		if comments == 1 {
+		if item.Comments == 1 {
 			plural = ""
 		}
-		commentStr = fmt.Sprintf(" &middot; %d comment%s", int(comments), plural)
+		commentStr = fmt.Sprintf(" &middot; %d comment%s", item.Comments, plural)
 	}
 
 	return fmt.Sprintf(`
@@ -126,7 +132,7 @@ func generateIssueRow(item any, isLastIssue bool) string {
           %s
         </p>
       </td>
-    </tr>`, paddingStyle, repoName, commentStr, htmlURL, title, truncatedBody)
+    </tr>`, paddingStyle, repoName, commentStr, item.HTMLURL, item.Title, truncatedBody)
 }
 
 func generateEmailBody(issuesByOrg []OrgIssues, totalIssues int) string {
@@ -226,13 +232,31 @@ func sendEmail(subject, body string) error {
 	return nil
 }
 
+func toOrgIssues(r *githubSearchResult) (OrgIssues, bool) {
+	if len(r.Items) == 0 {
+		return OrgIssues{}, false
+	}
+
+	parts := strings.Split(r.Items[0].RepositoryURL, "/")
+	if len(parts) <= 4 {
+		return OrgIssues{}, false
+	}
+
+	var issues []string
+	for i, issue := range r.Items {
+		issues = append(issues, generateIssueRow(issue, i == len(r.Items)-1))
+	}
+
+	return OrgIssues{Org: parts[4], issues: strings.Join(issues, ""), count: len(r.Items)}, true
+}
+
 func searchAndNotify() error {
 	if err := checkEnvVars(); err != nil {
 		return err
 	}
 
 	orgs := strings.Split(orgsToSearch, ", ")
-	res := make(chan map[string]any, len(orgs))
+	res := make(chan *githubSearchResult, len(orgs))
 
 	var wg sync.WaitGroup
 
@@ -250,41 +274,10 @@ func searchAndNotify() error {
 	totalIssues := 0
 
 	for r := range res {
-		if _, ok := r["error"]; ok {
-			continue
+		if orgIssues, ok := toOrgIssues(r); ok {
+			totalIssues += orgIssues.count
+			issuesByOrg = append(issuesByOrg, orgIssues)
 		}
-
-		items, ok := r["items"].([]any)
-		if !ok || len(items) == 0 {
-			continue
-		}
-
-		item, ok := items[0].(map[string]any)
-		if !ok {
-			continue
-		}
-
-		issues := []string{}
-
-		for i, issue := range items {
-			issues = append(issues, generateIssueRow(issue, i == len(items)-1))
-			totalIssues++
-		}
-
-		url, ok := item["repository_url"].(string)
-		if !ok {
-			continue
-		}
-
-		parts := strings.Split(url, "/")
-
-		if len(parts) <= 4 {
-			continue
-		}
-
-		org := parts[4]
-
-		issuesByOrg = append(issuesByOrg, OrgIssues{Org: org, issues: strings.Join(issues, ""), count: len(items)})
 	}
 
 	if len(issuesByOrg) == 0 {
@@ -293,12 +286,11 @@ func searchAndNotify() error {
 
 	emailBody := generateEmailBody(issuesByOrg, totalIssues)
 
-	subject := fmt.Sprintf("%d new good first issue%s", totalIssues, func() string {
-		if totalIssues > 1 {
-			return "s"
-		}
-		return ""
-	}())
+	plural := "s"
+	if totalIssues == 1 {
+		plural = ""
+	}
+	subject := fmt.Sprintf("%d new good first issue%s", totalIssues, plural)
 	return sendEmail(subject, emailBody)
 }
 
